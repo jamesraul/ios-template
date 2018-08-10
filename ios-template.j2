@@ -84,11 +84,11 @@ login on-success log
 ! ip ftp username {{ ftp_username }}
 ! ip ftp password {{ ftp_password }}
 ! Give our core dump files a unique name.
-exception core-file secure-router01-core
+exception core-file {{ inventory_hostname}}-core.dump
 exception protocol ftp
 exception dump {{ ftp_server }}
 !
-! Fire up CEF for both performance and security.
+! enable CEF for both performance and security.
 ip cef
 !
 
