@@ -30,6 +30,7 @@ no enable password
 !
 ! tacacs-server host {{ tacacs_server1 }}
 ! tacacs-server key {{ tacacs_key }}
+! ip tacacs source-interface {{ mgmt_interface_id }}
 !
 ! Use local (case sensitive) for AAA when theres no tac server
 aaa authentication login default group local-case
@@ -81,8 +82,9 @@ login on-failure log
 login on-success log
 !
 ! Catch crash dumps; very important with a “security router.”
-! ip ftp username {{ ftp_username }}
-! ip ftp password {{ ftp_password }}
+ip ftp username {{ ftp_username }}
+ip ftp password {{ ftp_password }}
+ip ftp source-interface {{ mgmt_interface_id }}
 ! Give our core dump files a unique name.
 exception core-file {{ inventory_hostname}}-core.dump
 exception protocol ftp
@@ -96,18 +98,12 @@ clock timezone UTC 0 0
 ntp update-calendar
 ntp server {{ ntp_server }}
 !
-! Configure the loopback0 interface as the source of our log  messages. 
-! int loopback0
-! ip address 10.10.10.10 255.255.255.255
-! no ip redirects
-! no ip unreachables
-! no ip proxy-arp
 !
 ! Configure null0 as a place to send bad packets
-interface null0
+interface Null0
  no ip unreachables
 !
-interface Ethernet2/0
+interface {{ external_interface_id }}
  description {{ external_interface_description }}
  ip address {{ external_interface_address }} {{ external_interface_mask }}
  ! Apply our template ACL
@@ -138,7 +134,7 @@ interface Ethernet2/0
  ! Disable Maintenance Operations Protocol on all interfaces
  no mop enable
 !
-interface Ethernet2/1
+interface {{ internal_interface_id }}
  description {{ internal_interface_description }}
  ip address {{ internal_interface_address }} {{ internal_interface_mask }}
  ip access-group 115 in
@@ -153,8 +149,8 @@ interface Ethernet2/1
 !
 !
 ! Netflow config
-! ip flow-export source loopback0
-! ip flow-export destination 192.0.2.34 2055
+! ip flow-export source {{ mgmt_interface_id }}
+! ip flow-export destination {{ netflow_collector_ip }} 2055
 ! ip flow-export version 5 origin-as
 !
 ! Log anything interesting to the loghost. Capture all of
@@ -162,7 +158,7 @@ interface Ethernet2/1
 logging trap debugging
 logging facility local5
 ! Syslog config
-! logging source-interface {{ syslog_src_int }}
+! logging source-interface {{ mgmt_interface_id }}
 ! logging {{ syslog_server }}
 !
 access-list 100 remark Management Access ACL
@@ -188,19 +184,17 @@ access-list 170 permit ip any 224.0.0.0 15.255.255.255
 ! Deny any packets from the RFC 1918, IANA reserved, test,
 ! multicast as a source, and loopback netblocks to block
 ! attacks from commonly spoofed IP addresses.
-access-list 2010 remark Anti-bogon ACL
+access-list 2010 remark EXTERNAL INBOUND ACL
 ! Claims it came from the inside network, yet arrives on the
 ! outside. Do not use this if CEF has been configured to take care of spoofing.
 access-list 2010 deny ip {{ public_ip_block }} {{ public_ip_block_invert_mask }} any log-input
 access-list 2010 deny ip {{ public_ip_block }} {{ public_ip_block_invert_mask }} any log-input
 ! Drop all ICMP fragments
 access-list 2010 deny icmp any any fragments log-input
-access-list 2010 permit ip any {{ public_ip_block }} {{ public_ip_block_invert_mask }}
-access-list 2010 deny ip any any log-input
+
 !
 ! Do not share CDP information
 no cdp run
-! SNMP is VERY important, particularly with MRTG.
 ! Treat the COMMUNITY string as a password – keep it difficult to guess.
 ! For SNMP versions 1-2
 snmp-server community {{ snmp_community }} RO 100
@@ -213,6 +207,107 @@ Violators will be prosecuted to the fullest extent of both civil
 and criminal law.
 
 %
+!
+
+router bgp {{ bgp_local_asn }}
+!
+! Set graceful restart-time to 120 and stalepath-time to 360 for route handling optimization.
+! Time listed is in seconds
+bgp graceful-restart
+!
+! Don't wait for the IGP to catch up.
+no synchronization
+!
+! Be a little more forgiving of an occasional missed keepalive.
+no bgp fast-external-fallover
+!
+! Track and punt, via syslog, all interesting observations about our
+! neighbors.
+bgp log-neighbor-changes
+!
+! Set Maximum AS-Path Prepends to 10 to limit an insane number of prepends.
+! The Cisco IOS command, which would limit prepends to a sane level would be :
+bgp maxas-limit 10
+!
+! Annouce our prefix to bgp neighbors
+network {{ public_ip_block }} mask {{ public_ip_block_mask }}
+!
+! peer via eBGP peer with the ASN .
+neighbor {{ bgp_peer_ip }} remote-as {{ bgp_remote_asn }}
+!
+! Cisco provides a TTL security check feature. This is designed
+! to limit the number of remote devices that can send BGP (TCP
+! 179) packets to our router. 
+neighbor {{ bgp_peer_ip }} ttl-security hops 2
+!
+!
+! Set for soft reconfiguration, thus preventing a complete withdrawal
+! of all announced prefixes when clear ip bgp x.x.x.x is typed.
+neighbor {{ bgp_peer_ip }} soft-reconfiguration inbound
+!
+! Type in a description of peer
+neighbor {{ bgp_peer_ip }} description {{ external_interface_description }}
+!
+! Set up a password for authentication.
+!
+! Hard-set for version 4. Disabled BGP version negotiation, thus
+! bringing the peering session on-line more quickly.
+neighbor {{ bgp_peer_ip }} version 4
+!
+!
+! Announce only those networks we specifically list. This also prevents
+! the network from becoming a transit provider. An added bit of protection
+! and good netizenship. See the announce prefix-list below.
+neighbor {{ bgp_peer_ip }} prefix-list announce out
+!
+! Prevent a mistake or mishap by our peer (or someone with whom our peer
+! has a peering agreement) from causing router meltdown by filling the
+! routing and BGP tables. This is a hard limit. At 75% of this limit,
+! the IOS will issue log messages warning that the neighbor is approaching
+! the limit. All log messages should be sent to a remote syslog host.
+! The warning water mark can be modified by placing a value after the
+! maximum prefix value, e.g. maximum-prefix 250000 50. This will set the
+! IOS to issue warning messages when the neighbor reaches 50% of the limit.
+! Note that this number may need to be adjusted upward in the future to
+! account for growth in the Internet routing table.
+neighbor {{ bgp_peer_ip }} maximum-prefix 800000
+!
+!
+no auto-summary
+!
+! If we have multiple links on the same router to the same AS, we like to
+! put them to good use. Load balance, per destination, with maximum-paths.
+! The limit is six. For our example, we will assume two equal size pipes
+! to the same AS.
+maximum-paths 2
+!
+! Now add our null route and the loopback/iBGP route. Remember to add
+! more specific non-null routes so that the packets travel to their
+! intended destination!
+ip route {{ public_ip_block }} {{ public_ip_block_mask }} Null0
+
+!
+! We protect TCP port 179 (BGP port) from miscreants by limiting
+! access. Allow our peers to connect and log all other attempts.
+! Remember to apply this ACL to the interfaces of the router or
+! add it to existing ACLs.
+! Please note that ACL 185 would block ALL traffic as written. This
+! is designed to focus only on protecting BGP. You MUST modify ACL
+! 185 to fit your environment and approved traffic patterns.
+access-list 2010 permit tcp host {{ bgp_peer_ip }} host {{ external_interface_address }} eq 179
+access-list 2010 permit tcp host {{ bgp_peer_ip }} eq bgp host {{ external_interface_address }}
+
+access-list 2010 permit ip any {{ public_ip_block }} {{ public_ip_block_invert_mask }}
+access-list 2010 deny ip any any log-input
+!
+! The announce prefix list prevents us from announcing anything beyond
+! our aggregated netblock(s).
+ip prefix-list announce description Our allowed routing announcements
+ip prefix-list announce seq 10 permit {{ public_ip_block }}{{public_ip_block_subnet_cidr }} 
+ip prefix-list announce seq 20 deny 0.0.0.0/0 le 32
+!
+
+
 !
 line con 0
  exec-timeout 5 0
