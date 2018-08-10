@@ -1,0 +1,2 @@
+[list_of_routers]
+inet-rtr1 ansible_connection=local

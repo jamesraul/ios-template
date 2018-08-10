@@ -1,0 +1,29 @@
+---
+- hosts: all
+  gather_facts: False
+  vars:
+    enable_secret: "Ch@ngeM3S00n!"
+    tacacs_server1: 10.1.1.1
+    tacacs_key: "tacacs_key123"
+    RAdmin_password: "Ch@ngeM3v3ryS00n!"
+    ftp_username: "rtr-ftp-user" 
+    ftp_password: "rtr-ftp-passwd"
+    ftp_server: 10.1.1.1
+    ntp_server: 10.1.1.1
+    syslog_server: 10.1.1.1
+    syslog_src_int: "Loopback0"
+    external_interface_description: "External Internet Interface"
+    external_interface_address: 209.209.209.2
+    external_interface_mask: 255.255.255.252
+    internal_interface_description: "Internal Interface"
+    internal_interface_address: 10.1.1.1
+    internal_interface_mask: 255.255.255.0
+    trust_mgmt_ip_block: 10.1.1.0
+    trust_mgmt_ip_block_invert_mask: 0.0.0.255
+    public_ip_block: 209.209.209.0
+    public_ip_block_invert_mask: 0.0.0.255
+    domain_name: "edge-router.io"
+    snmp_community: "d0nt3v3nTry"
+  tasks:
+  - name: write the config file
+    template: src=ios-template.j2 dest=./{{ inventory_hostname }}.conf
